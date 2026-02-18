@@ -2,7 +2,7 @@
 
 <p align="center">
     <picture>
-  <img src="assets/crabbot-logo.png" alt="CrabBot logo" width="220">
+  <img src="assets/crabbot.png" alt="CrabBot logo" width="220">
     </picture>
 </p>
 
