@@ -1,0 +1,44 @@
+[package]
+name = "crabbot"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+crabbot-shared = { path = "../crabbot-shared" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# server deps
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "io-util", "signal", "time", "process"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7.18"
+
+axum = { version = "0.8.8", features = ["macros", "json", "ws"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "sensitive-headers", "compression-full", "fs"] }
+
+homedir = "0.3"
+dirs = "6"
+uuid = { version = "1.20", features = ["v4"] }
+async-trait = "0.1"
+
+# cli
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.27"
+ratatui = "0.26"
+unicode-width = "0.1"
+futures-util = { version = "0.3.31", features = ["sink"] }
+
+# vector database
+sqlite-vec = "0.1"
+tokio-rusqlite = "0.5"
+rusqlite = { version = "0.31", features = ["bundled"] } # or drop "bundled" if you rely on system sqlite
+zerocopy = "0.7"
+
+sha2 = "0.10.9"
+chrono = "0.4.43"

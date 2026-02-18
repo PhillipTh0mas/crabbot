@@ -1,0 +1,20 @@
+# docker-compose.yml
+services:
+  crabbot:
+    build:
+      context: ./crabbot-runtime
+      dockerfile: Dockerfile
+    image: crabbot:latest
+    container_name: crabbot
+    restart: unless-stopped
+    init: true
+    environment:
+      RUST_LOG: info
+    volumes:
+      - crabbot-data:/root/.config/crabbot
+    # Add ports if your runtime serves anything (examples)
+    # ports:
+    #   - "8080:8080"
+
+volumes:
+  crabbot-data:

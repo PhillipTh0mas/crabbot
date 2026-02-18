@@ -1,0 +1,21 @@
+<!doctype html>
+<html class="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="stylesheet" href="/tailwind-43547b53df95ff14.css" integrity="sha384-YQbWNUYtXCCWcVcZ9MobVZwRDeVu6gFoHCNS6FiPMTuYidF0zSPjOsxqZB1JFQwP"/>
+        <title>Crabbot</title>
+    <link rel="modulepreload" href="/crabbot-ui-dc5727d211952c8f.js" crossorigin="anonymous" integrity="sha384-ivHvrDmfri1025QuaE/ZSX1kxkNkV13lC3IVtd+/9MCZB2gZydWUdFMTPh8dKtkY"><link rel="preload" href="/crabbot-ui-dc5727d211952c8f_bg.wasm" crossorigin="anonymous" integrity="sha384-VGrjGDPFzX8NMfDKw36LE649oeByM7G/UMQw/YwrNrlavpsK8FknYOxopHBLUWxt" as="fetch" type="application/wasm"></head>
+    <body>
+<script type="module">
+import init, * as bindings from '/crabbot-ui-dc5727d211952c8f.js';
+const wasm = await init({ module_or_path: '/crabbot-ui-dc5727d211952c8f_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>

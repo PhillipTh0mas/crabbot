@@ -1,0 +1,60 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "adapter": "CodeLLDB",
+    "label": "crabbot chat",
+    "type": "lldb",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/crabbot",
+    "args": ["chat"],
+    "build": {
+      "label": "cargo run -p crabbot",
+      "command": "cargo",
+      "args": ["build", "--package", "crabbot"],
+      "env": {
+        "RUSTC_TOOLCHAIN": "/home/phillip/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+      },
+      "cwd": "/home/phillip/projects/crabbot",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "reveal_target": "dock",
+      "hide": "never",
+      "tags": [],
+      "shell": "system",
+      "show_summary": false,
+      "show_command": false,
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "adapter": "CodeLLDB",
+    "label": "crabbot runtime",
+    "type": "lldb",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/crabbot",
+    "args": ["runtime", "run"],
+    "build": {
+      "label": "cargo run -p crabbot",
+      "command": "cargo",
+      "args": ["build", "--package", "crabbot"],
+      "env": {
+        "RUSTC_TOOLCHAIN": "/home/phillip/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+      },
+      "cwd": "/home/phillip/projects/crabbot",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "reveal_target": "dock",
+      "hide": "never",
+      "tags": [],
+      "shell": "system",
+      "show_summary": false,
+      "show_command": false,
+    },
+    "sourceLanguages": ["rust"],
+  },
+]

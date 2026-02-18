@@ -1,0 +1,53 @@
+[config]
+default_to_workspace = false
+
+[tasks.dev]
+description = "Dev: build UI, run crabbot runtime, watch UI"
+script_runner = "@shell"
+script = '''
+set -e
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+
+mkdir -p target/debug/bundle/ui-dist
+
+# Build UI once (so server has something to serve)
+cd crabbot-ui
+trunk build --dist ../target/debug/bundle/ui-dist --public-url /ui/
+cd ..
+
+# Start runtime (serves UI from CRABBOT_UI_DIST)
+CRABBOT_UI_DIST=target/debug/bundle/ui-dist \
+  cargo run -p crabbot -- runtime run &
+echo $! > target/debug/bundle/crabbot.pid
+
+cleanup() {
+  if [ -f target/debug/bundle/crabbot.pid ]; then
+    kill "$(cat target/debug/bundle/crabbot.pid)" 2>/dev/null || true
+    rm -f target/debug/bundle/crabbot.pid
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# Watch/rebuild UI into the same folder
+cd crabbot-ui
+trunk watch --dist ../target/debug/bundle/ui-dist --public-url /ui/
+'''
+
+[tasks.release]
+description = "Release: build runtime + UI into dist/"
+script_runner = "@shell"
+script = '''
+set -e
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+
+rm -rf dist
+mkdir -p dist/ui-dist
+
+# Build the runtime binary (named crabbot)
+cargo build -p crabbot --release
+cp target/release/crabbot dist/
+
+# Build UI into dist/ui-dist (served at /ui/)
+cd crabbot-ui
+trunk build --release --dist ../dist/ui-dist --public-url /ui/
+'''
