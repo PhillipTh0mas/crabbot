@@ -72,6 +72,7 @@ pub async fn run_memory_flush(
     tail_for_prompt: &[TranscriptEvent],
     flush_context_max_chars: usize,
 ) -> Result<FlushResult> {
+    tracing::info!("Running memory flush for session {}", session.session_key);
     let ctx = render_for_memory_flush(tail_for_prompt, flush_context_max_chars);
 
     let events = vec![
@@ -100,7 +101,7 @@ pub async fn apply_flush_result(
     }
 
     if !res.long_term.is_empty() {
-        let existing = memory.get_long_term().await.unwrap_or_default();
+        let existing = memory.get_short_term().await.unwrap_or_default();
         let mut merged = existing;
         if !merged.ends_with('\n') && !merged.is_empty() {
             merged.push('\n');
@@ -110,7 +111,7 @@ pub async fn apply_flush_result(
             merged.push_str(item.trim());
             merged.push('\n');
         }
-        memory.write_long_term_replace(&merged).await?;
+        memory.write_short_term_replace(&merged).await?;
     }
 
     Ok(())

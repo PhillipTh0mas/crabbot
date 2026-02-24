@@ -22,6 +22,18 @@ pub fn local_day_string() -> String {
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
 }
 
+/// Yesterday's local day string in system timezone (e.g. "2026-02-16").
+pub fn local_day_string_yesterday() -> String {
+    let now = Local::now();
+    let yesterday = now - chrono::Duration::days(1);
+    format!(
+        "{:04}-{:02}-{:02}",
+        yesterday.year(),
+        yesterday.month(),
+        yesterday.day()
+    )
+}
+
 /// Current UTC day string (e.g. "2026-02-17").
 pub fn utc_day_string() -> String {
     let now = Utc::now();

@@ -10,11 +10,22 @@ services:
     init: true
     environment:
       RUST_LOG: info
+      CRABBOT_LLM_BASE_URL: http://ollama:11434
+      CRABBOT_LLM_MODEL: glm-4.7-flash
     volumes:
       - crabbot-data:/root/.config/crabbot
     # Add ports if your runtime serves anything (examples)
     # ports:
     #   - "8080:8080"
-
+    # -
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    gpus: all
 volumes:
   crabbot-data:
+  ollama:

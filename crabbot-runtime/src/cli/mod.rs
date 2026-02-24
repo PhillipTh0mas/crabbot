@@ -1,5 +1,6 @@
 // src/cli/mod.rs
 use clap::{Parser, Subcommand};
+use crabbot_shared::DEFAULT_SESSION_KEY;
 use tokio_util::sync::CancellationToken;
 
 use crate::{error::Result, runtime};
@@ -65,7 +66,7 @@ pub async fn entrypoint() -> Result<()> {
             let tui_task = tokio::task::spawn_blocking({
                 let engine = engine.clone();
                 let cancel = cancel.clone();
-                move || tui::run_blocking(engine, "user:me".to_string(), cancel)
+                move || tui::run_blocking(engine, DEFAULT_SESSION_KEY.to_string(), cancel)
             });
 
             tokio::select! {

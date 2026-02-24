@@ -4,9 +4,17 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use tokio::sync::RwLock;
 
+use crate::config::Paths;
+use crate::memory::service::MemoryService;
+use crate::task::manager::TaskManager;
+// use crate::tools::builtin::browser::BrowserTool;
 use crate::tools::builtin::command::CommandTool;
+use crate::tools::builtin::memory::MemoryTool;
 use crate::tools::builtin::noop::NoopTool;
+use crate::tools::builtin::task::TasksTool;
+use crate::tools::builtin::ui_html::UiHtmlTool;
 use crate::tools::tool::ToolSpec;
+use crate::ui::store::UiHtmlStore;
 
 #[derive(Debug, Clone)]
 pub struct CompactToolSpec {
@@ -128,14 +136,31 @@ impl ToolRegistry {
     }
 
     // Built-in tools are always available unless policy blocks them.
-    pub async fn register_builtins(&self) -> crate::error::Result<()> {
+    pub async fn register_builtins(
+        &self,
+        paths: &Paths,
+        memory: &Arc<MemoryService>,
+        tasks: &Arc<TaskManager>,
+        html_store: &UiHtmlStore,
+    ) -> crate::error::Result<()> {
         // Wire your actual builtins here.
         // add noop tool
-        let tool = Arc::new(NoopTool::new());
-        self.register(tool).await?;
+        // let tool = Arc::new(NoopTool::new());
+        // self.register(tool).await?;
         // add command tool
         let tool = Arc::new(CommandTool::new());
         self.register(tool).await?;
+
+        let tool = Arc::new(MemoryTool::new(memory.clone()));
+        self.register(tool).await?;
+        let tool = Arc::new(UiHtmlTool::new(html_store.clone()));
+        self.register(tool).await?;
+        let tool = Arc::new(TasksTool::new(tasks.clone()));
+        self.register(tool).await?;
+
+        // let tool = Arc::new(BrowserTool::new());
+        // self.register(tool).await?;
+
         Ok(())
     }
 

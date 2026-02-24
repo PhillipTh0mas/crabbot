@@ -128,6 +128,18 @@ impl SessionStore {
         Ok(idx.entries.keys().cloned().collect())
     }
 
+    pub async fn get(&self, session_key: &str) -> Result<SessionEntry> {
+        let idx = self.index.read().await;
+        if let Some(e) = idx.entries.get(session_key) {
+            return Ok(e.clone());
+        } else {
+            Err(Error::not_found(format!(
+                "session {} was not found",
+                session_key
+            )))
+        }
+    }
+
     pub async fn get_or_create(&self, session_key: &str) -> Result<SessionEntry> {
         {
             let idx = self.index.read().await;
@@ -177,7 +189,7 @@ impl SessionStore {
             if let Some(e) = idx.entries.get(session_key) {
                 let needs_write = self.needs_reset(e, now_ts_ms, local_day, idle_reset_after_ms)
                     != ResetReason::None
-                    || self.needs_activity_update(e, now_ts_ms, local_day);
+                    || self.needs_activity_update(e, now_ts_ms, local_day, idle_reset_after_ms);
 
                 if !needs_write {
                     return Ok(InitOutcome {
@@ -370,9 +382,35 @@ impl SessionStore {
         self.save().await
     }
 
-    fn needs_activity_update(&self, entry: &SessionEntry, now_ts_ms: i64, local_day: &str) -> bool {
-        entry.counters.last_activity_ts_ms != now_ts_ms
-            || entry.counters.last_activity_local_day.as_deref() != Some(local_day)
+    fn needs_activity_update(
+        &self,
+        entry: &SessionEntry,
+        now_ts_ms: i64,
+        local_day: &str,
+        idle_reset_after_ms: Option<i64>,
+    ) -> bool {
+        // Always update if the day changed
+        if entry.counters.last_activity_local_day.as_deref() != Some(local_day) {
+            return true;
+        }
+
+        let last = entry.counters.last_activity_ts_ms;
+
+        // If we never recorded activity before
+        if last == 0 {
+            return true;
+        }
+
+        match idle_reset_after_ms {
+            Some(threshold) => {
+                let delta = now_ts_ms.saturating_sub(last);
+                delta >= threshold
+            }
+            None => {
+                // If idle reset is disabled, only update on day change
+                false
+            }
+        }
     }
 
     fn needs_reset(

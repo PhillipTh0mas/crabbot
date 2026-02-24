@@ -85,7 +85,7 @@ impl Tool for CommandTool {
         }
     }
 
-    async fn call(&self, call: ToolCall) -> Result<ToolResult> {
+    async fn call(&self, call: ToolCall, _session_key: &str) -> Result<ToolResult> {
         // ToolCall.args in your codebase is a String; parse it as JSON.
 
         let args: CommandArgs = serde_json::from_value(call.args)

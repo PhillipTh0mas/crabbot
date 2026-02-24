@@ -1,3 +1,4 @@
+mod agent;
 mod api;
 mod cli;
 mod config;
@@ -10,8 +11,10 @@ mod routing;
 mod run;
 mod runtime;
 mod storage;
+mod task;
 mod time;
 mod tools;
+mod ui;
 
 use crate::error::Result;
 

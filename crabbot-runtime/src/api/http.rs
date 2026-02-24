@@ -17,6 +17,7 @@ use axum::{
 use crabbot_shared::api::{
     model::{ListSessionsResp, PostMessageReq, PostMessageResp, TranscriptQuery, TranscriptResp},
     transcript::TranscriptEvent,
+    ui_html::{UiHtmlGetResp, UiHtmlUpdate},
 };
 use futures_util::{SinkExt, StreamExt as FuturesStreamExt}; // for WebSocket recv/send loops
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,11 @@ pub fn build_router(engine: Arc<RunEngine>, cfg: ApiConfig) -> Result<Router> {
             get(transcript_stream),
         )
         .route("/v1/sessions/{session_key}/ws", get(chat_ws))
+        .route("/v1/sessions/{session_key}/ui_html", get(get_ui_html))
+        .route(
+            "/v1/sessions/{session_key}/ui_html/stream",
+            get(ui_html_stream),
+        )
         // Hooks
         .route("/hooks/wake", post(hooks_wake))
         .route("/hooks/agent", post(hooks_agent))
@@ -364,6 +370,65 @@ async fn chat_ws_task(state: AppState, session_key: String, mut socket: WebSocke
     }
 
     let _ = session_id; // keep if you want to use it for anything else later
+}
+
+fn default_name() -> String {
+    "default".to_string()
+}
+
+async fn get_ui_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_key): Path<String>,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+
+    let (exists, html) = state.http.engine.get_ui_html(&session_key).await?;
+
+    Ok((StatusCode::OK, Json(UiHtmlGetResp { exists, html })))
+}
+
+async fn ui_html_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_key): Path<String>,
+) -> Result<Response> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+
+    let last_id: i64 = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    // subscribe first
+    let rx = state.http.engine.subscribe_ui_html(&session_key).await?;
+    let mut stream = BroadcastStream::new(rx);
+
+    let live = TokioStreamExt::filter_map(stream, move |item| {
+        let ev = match item {
+            Ok(ev) => ev,
+            Err(_) => return None,
+        };
+
+        // allow reconnect clients to ignore old events by ts_ms if you want:
+        let ts = match &ev {
+            UiHtmlUpdate::Saved { ts_ms, .. } => *ts_ms,
+            UiHtmlUpdate::Deleted { ts_ms, .. } => *ts_ms,
+        };
+        if ts <= last_id {
+            return None;
+        }
+
+        let id = ts.to_string();
+        let data = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".into());
+        Some(Ok::<Event, Infallible>(
+            Event::default().event("ui_html").id(id).data(data),
+        ))
+    });
+
+    let sse = Sse::new(live).keep_alive(axum::response::sse::KeepAlive::default());
+    Ok(sse.into_response())
 }
 
 // ---------------- Hooks ----------------

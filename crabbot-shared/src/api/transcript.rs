@@ -19,7 +19,6 @@ pub enum TranscriptEvent {
     CompactionSummary(CompactionSummaryEvent),
     CustomMessage(CustomMessageEvent),
     CustomNote(CustomNoteEvent),
-    UserFacingHtml(UserFacingHtml),
 }
 
 impl TranscriptEvent {
@@ -100,7 +99,6 @@ impl TranscriptEvent {
             TranscriptEvent::CompactionSummary(e) => e.ts_ms,
             TranscriptEvent::CustomMessage(e) => e.ts_ms,
             TranscriptEvent::CustomNote(e) => e.ts_ms,
-            TranscriptEvent::UserFacingHtml(u) => u.ts_ms,
         }
     }
 
@@ -169,13 +167,6 @@ impl TranscriptEvent {
 
             // Explicitly out-of-context.
             TranscriptEvent::CustomNote(_) => {}
-
-            TranscriptEvent::UserFacingHtml(u) => {
-                messages.push(json!({
-                    "role": "user",
-                    "content": u.html
-                }));
-            }
         }
 
         messages
@@ -292,11 +283,6 @@ impl TranscriptEvent {
                 TranscriptEvent::CustomNote(_) => {
                     // explicitly out-of-context
                 }
-                TranscriptEvent::UserFacingHtml(u) => {
-                    out.push_str("UserFacingHtml: ");
-                    out.push_str(&trunc(&u.html, MAX_LINE_CHARS));
-                    out.push('\n');
-                }
             }
         }
 
@@ -357,12 +343,6 @@ pub struct CustomNoteEvent {
     pub ts_ms: i64,
     pub key: String,
     pub value: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UserFacingHtml {
-    pub ts_ms: i64,
-    pub html: String,
 }
 
 fn now_ms() -> i64 {

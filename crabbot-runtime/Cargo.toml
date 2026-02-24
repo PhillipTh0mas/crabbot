@@ -19,7 +19,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7.18"
 
 axum = { version = "0.8.8", features = ["macros", "json", "ws"] }
-reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate", "rustls-tls", "stream"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "sensitive-headers", "compression-full", "fs"] }
 
 homedir = "0.3"
@@ -42,3 +42,11 @@ zerocopy = "0.7"
 
 sha2 = "0.10.9"
 chrono = "0.4.43"
+
+
+# browser tool
+chromiumoxide = { version = "0.5", features = ["tokio-runtime"] }
+parking_lot = "0.12"
+base64 = "0.22"
+url = "2"
+zip = "0.6"

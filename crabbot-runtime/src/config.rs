@@ -47,7 +47,10 @@ impl Config {
                     routing: RoutingConfig::from_env(),
                     tool_policy: ToolPolicy::from_env(),
                     memory: MemoryConfig::from_env(),
-                    idle_reset_after_ms: Some(env_i64("CRABBOT_IDLE_RESET_AFTER_MS", 60000)),
+                    idle_reset_after_ms: Some(env_i64(
+                        "CRABBOT_IDLE_RESET_AFTER_MS",
+                        1_000 * 60 * 60,
+                    )),
                 };
                 config.ensure_dirs()?;
                 config.save()?;
@@ -128,12 +131,42 @@ impl Paths {
         std::fs::create_dir_all(self.transcripts_dir())?;
         std::fs::create_dir_all(self.runtime_dir())?;
         std::fs::create_dir_all(self.memory_dir())?;
+        std::fs::create_dir_all(self.agents_dir())?;
+        std::fs::create_dir_all(self.ui_dir())?;
+        std::fs::create_dir_all(self.tasks_dir())?;
+
+        self.ensure_default_files()?;
 
         Ok(())
     }
 
+    fn ensure_default_files(&self) -> Result<()> {
+        write_if_missing(&self.soul_file(), DEFAULT_SOUL_MD)?;
+
+        write_if_missing(&self.agents_file(), DEFAULT_AGENTS_MD)?;
+
+        write_if_missing(&self.memory_file(), DEFAULT_MEMORY_MD)?;
+
+        // Optional: default agent registry JSON (if you use agents.json)
+        // write_if_missing(&self.agents_dir().join("agents.json"), DEFAULT_AGENTS_JSON)?;
+
+        Ok(())
+    }
+
+    pub fn soul_file(&self) -> PathBuf {
+        self.data_dir.join("SOUL.md")
+    }
+
+    pub fn agents_file(&self) -> PathBuf {
+        self.data_dir.join("AGENTS.md")
+    }
+
+    pub fn memory_file(&self) -> PathBuf {
+        self.memory_dir().join("MEMORY.md")
+    }
+
     pub fn config_file(&self) -> PathBuf {
-        let config_file = self.data_dir.join("config.toml");
+        let config_file = self.data_dir.join("config.json");
         config_file
     }
 
@@ -141,8 +174,16 @@ impl Paths {
         &self.data_dir
     }
 
+    pub fn tasks_dir(&self) -> PathBuf {
+        self.data_dir.join("tasks")
+    }
+
     pub fn sessions_dir(&self) -> PathBuf {
         self.data_dir.join("sessions")
+    }
+
+    pub fn ui_dir(&self) -> PathBuf {
+        self.data_dir.join("ui")
     }
 
     pub fn transcripts_dir(&self) -> PathBuf {
@@ -160,6 +201,21 @@ impl Paths {
     pub fn memory_dir(&self) -> PathBuf {
         self.data_dir.join("memory")
     }
+
+    pub fn agents_dir(&self) -> PathBuf {
+        self.data_dir.join("agents")
+    }
+}
+
+fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, contents)?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -204,7 +260,7 @@ impl LlmConfig {
     fn from_env() -> Result<Self> {
         Ok(Self {
             base_url: std::env::var("CRABBOT_LLM_BASE_URL")
-                .unwrap_or_else(|_| "http://192.168.2.87:11434/v1".into()),
+                .unwrap_or_else(|_| "http://localhost:11434/v1".into()),
             provider: LLMProvider::Ollama,
             model: std::env::var("CRABBOT_LLM_MODEL").unwrap_or_else(|_| "glm-4.7-flash".into()),
             timeout_secs: env_u64("CRABBOT_LLM_TIMEOUT_SECS", 60),
@@ -220,19 +276,15 @@ pub struct PromptConfig {
     pub compaction_threshold_tokens: usize,
     pub compaction_max_chars: usize,
     pub flush_threshold_tokens: usize,
-    pub system_preamble: String,
 }
 
 impl PromptConfig {
     fn from_env() -> Self {
         Self {
-            max_history_events: env_usize("CRABBOT_PROMPT_MAX_HISTORY_EVENTS", 80),
-            compaction_threshold_tokens: env_usize("CRABBOT_PROMPT_COMPACTION_MAX_TOKENS", 30000),
-            compaction_max_chars: env_usize("CRABBOT_PROMPT_COMPACTION_MAX_CHARS", 350),
-            flush_threshold_tokens: env_usize("CRABBOT_PROMPT_FLUSH_MAX_TOKENS", 10000),
-            system_preamble: std::env::var("CRABBOT_SYSTEM_PROMPT").unwrap_or_else(|_| {
-                "You are CrabBot. Use tools explicitly and safely.".to_string()
-            }),
+            max_history_events: env_usize("CRABBOT_PROMPT_MAX_HISTORY_EVENTS", 160),
+            compaction_threshold_tokens: env_usize("CRABBOT_PROMPT_COMPACTION_MAX_TOKENS", 32_000),
+            compaction_max_chars: env_usize("CRABBOT_PROMPT_COMPACTION_MAX_CHARS", 2_500),
+            flush_threshold_tokens: env_usize("CRABBOT_PROMPT_FLUSH_MAX_TOKENS", 24_000),
         }
     }
 }
@@ -254,12 +306,14 @@ impl QueueConfig {
 pub struct RoutingConfig {
     /// If true, all inbound messages collapse into a single session.
     pub single_session: bool,
+    pub default_agent_id: String,
 }
 
 impl RoutingConfig {
     fn from_env() -> Self {
         Self {
             single_session: env_bool("CRABBOT_SINGLE_SESSION", true),
+            default_agent_id: env_string("CRABBOT_DEFAULT_AGENT_ID", "default".to_string()),
         }
     }
 }
@@ -319,12 +373,12 @@ impl MemoryConfig {
                 "nnomic-embed-text-v2-moe".to_string(),
             ),
             embed_model_provider: LLMProvider::Ollama,
-            chunk_max_chars: env_usize("CRABBOT_CHUNK_MAX_CHARS", 1200),
-            flush_context_max_chars: env_usize("CRABBOT_FLUSH_CONTEXT_MAX_CHARS", 1500),
+            chunk_max_chars: env_usize("CRABBOT_CHUNK_MAX_CHARS", 1_800),
+            flush_context_max_chars: env_usize("CRABBOT_FLUSH_CONTEXT_MAX_CHARS", 100_000),
             chunk_overlap_chars: env_usize("CRABBOT_CHUNK_OVERLAP_CHARS", 200),
             default_top_k: env_usize("CRABBOT_DEFAULT_TOP_K", 4),
             recall_top_k: env_usize("CRABBOT_RECALL_TOP_K", 4),
-            recall_max_chars: env_usize("CRABBOT_RECALL_MAX_CHARS", 1200),
+            recall_max_chars: env_usize("CRABBOT_RECALL_MAX_CHARS", 3_000),
             max_get_chars: env_usize("CRABBOT_MAX_GET_CHARS", 60_000),
         }
     }
@@ -394,3 +448,86 @@ fn env_bool(key: &str, default: bool) -> bool {
         })
         .unwrap_or(default)
 }
+
+const DEFAULT_SOUL_MD: &str = r#"# SOUL
+
+You are CrabBot.
+
+## Operating rules
+- Be direct and precise.
+- Do not fabricate tool results or claim actions you did not perform.
+- If a tool is required to be correct, use it. Do not ask the user to repeat info you already have.
+- Prefer concrete outputs (files, patches, commands, structured data) over explanations unless asked.
+
+## Tool use
+- Use tools proactively when they improve correctness or reduce user effort.
+- If a tool call fails, say it failed and why, then try the next best option.
+- Never pretend a tool succeeded.
+
+## Memory policy (write-to-remember)
+- Your only durable memory is what you save via the memory tool.
+- If something should be remembered for future sessions, save it:
+  - use short term memory or top of mind info
+  - use save for on demand searchable indexed memory.
+
+## Tasks / heartbeats
+- Background work is done via tasks.
+- Use tasks for periodic checks, reminders, monitoring, or long-running multi-step work.
+- Task descriptions must be specific and include what output to report back.
+
+"#;
+
+const DEFAULT_AGENTS_MD: &str = r#"# AGENTS
+
+## Available agents
+- default: the primary agent that talks to the user and produces final outputs.
+
+## Multi-agent policy
+- Prefer staying in the default agent unless parallelism clearly helps.
+- Use tasks to represent background work or periodic work; do not invent additional agents unless they exist.
+
+## Tasks usage
+Use tasks to:
+- run recurring checks (e.g. monitor logs, watch a value, check a feed)
+- run long or multi-step work that doesn't need interactive back-and-forth
+- schedule reminders / follow-ups
+
+When creating tasks:
+- include the goal, success criteria, and what to report back
+- include any inputs or constraints (paths, endpoints, limits)
+- avoid vague descriptions like "keep an eye on it"
+
+"#;
+
+const DEFAULT_USER_MD: &str = r#"# USER
+
+## Identity
+- Name:
+- Preferred name:
+- Timezone:
+- Locale / language:
+
+## Communication preferences
+- Tone:
+- Length:
+- Formatting preferences (code-first, bullets, etc.):
+
+## Work context
+- Current projects:
+- Primary tools / stack:
+- Environment assumptions (OS, infra, constraints):
+
+## Durable preferences (safe to store)
+- Defaults for responses:
+- Reusable conventions (naming, style, structure):
+
+## Sensitive / do-not-store
+- Never store credentials, tokens, private keys, passwords, one-time codes.
+- Avoid storing highly personal details unless explicitly requested.
+
+"#;
+
+const DEFAULT_MEMORY_MD: &str = r#"# MEMORY
+
+Long-term durable notes.
+"#;

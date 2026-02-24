@@ -31,7 +31,7 @@ impl Tool for NoopTool {
         }
     }
 
-    async fn call(&self, call: ToolCall) -> Result<ToolResult> {
+    async fn call(&self, call: ToolCall, _session_key: &str) -> Result<ToolResult> {
         Ok(ToolResult::ok(
             call.id,
             call.name,

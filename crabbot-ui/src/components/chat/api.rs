@@ -1,3 +1,4 @@
+use crabbot_shared::api::ui_html::{UiHtmlGetResp, UiHtmlUpdate};
 use gloo_events::EventListener;
 use gloo_net::http::Request;
 use std::cell::RefCell;
@@ -164,5 +165,95 @@ pub fn api_stream_transcript(
         _on_message: on_message,
         _on_transcript: on_transcript,
         _on_session: on_session,
+    })
+}
+
+pub async fn api_get_ui_html(base_http: &str, session_key: &str) -> Result<UiHtmlGetResp, String> {
+    let url = format!(
+        "{}/v1/sessions/{}/ui_html",
+        base_url(base_http),
+        urlencoding::encode(session_key),
+    );
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+#[derive(Debug)]
+pub struct UiHtmlSse {
+    es: EventSource,
+    _on_open: EventListener,
+    _on_error: EventListener,
+    _on_message: EventListener,
+    _on_ui_html: EventListener,
+}
+
+impl UiHtmlSse {
+    pub fn close(&self) {
+        self.es.close();
+    }
+}
+
+/// `after_ts_ms` is used as Last-Event-ID by setting it in the URL as `after_ts_ms` if you want,
+/// but your server currently reads `Last-Event-ID` header (EventSource can't set headers).
+/// So: pass 0 and rely on server pushing only new events after connect; client refetches anyway.
+/// If you keep the `Last-Event-ID` logic server-side, it won't work with EventSource headers.
+pub fn api_stream_ui_html(
+    base_http: &str,
+    session_key: &str,
+    on_update: impl FnMut(UiHtmlUpdate) + 'static,
+    on_error: impl FnMut(String) + 'static,
+) -> Result<UiHtmlSse, String> {
+    let url = format!(
+        "{}/v1/sessions/{}/ui_html/stream",
+        base_url(base_http),
+        urlencoding::encode(session_key),
+    );
+
+    let es = EventSource::new(&url).map_err(|e| format!("EventSource open failed: {e:?}"))?;
+
+    let on_update = Rc::new(RefCell::new(on_update));
+    let on_error = Rc::new(RefCell::new(on_error));
+
+    let on_open = EventListener::new(&es, "open", |_evt| {});
+
+    let on_error_listener = {
+        let on_error = on_error.clone();
+        EventListener::new(&es, "error", move |_evt| {
+            (on_error.borrow_mut())("ui_html sse error".into());
+        })
+    };
+
+    let on_message = EventListener::new(&es, "message", |_evt| {});
+
+    let on_ui_html = {
+        let on_update = on_update.clone();
+        let on_error = on_error.clone();
+        EventListener::new(&es, "ui_html", move |evt| {
+            let me: MessageEvent = evt.dyn_ref::<MessageEvent>().unwrap().clone();
+            let Some(s) = me.data().as_string() else {
+                return;
+            };
+
+            match serde_json::from_str::<UiHtmlUpdate>(&s) {
+                Ok(ev) => (on_update.borrow_mut())(ev),
+                Err(e) => (on_error.borrow_mut())(format!("sse parse UiHtmlUpdate failed: {e}")),
+            }
+        })
+    };
+
+    Ok(UiHtmlSse {
+        es,
+        _on_open: on_open,
+        _on_error: on_error_listener,
+        _on_message: on_message,
+        _on_ui_html: on_ui_html,
     })
 }

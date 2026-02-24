@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crabbot_shared::api::transcript::TranscriptEvent;
 use tokio::fs;
 use tokio::sync::Mutex;
 
@@ -74,9 +75,15 @@ impl MemoryService {
         g.store.paths().clone()
     }
 
-    pub async fn get_long_term(&self) -> Result<String> {
+    pub async fn get_short_term(&self) -> Result<String> {
         let g = self.inner.lock().await;
         g.store.read_long_term().await
+    }
+
+    pub async fn update_short_term(&self, text: &str) -> Result<()> {
+        let g = self.inner.lock().await;
+        let _ = g.store.replace_long_term(text).await?;
+        Ok(())
     }
 
     pub async fn get_daily(&self, ymd: &str) -> Result<String> {
@@ -102,7 +109,7 @@ impl MemoryService {
         .await
     }
 
-    pub async fn write_long_term_replace(&self, text: &str) -> Result<()> {
+    pub async fn write_short_term_replace(&self, text: &str) -> Result<()> {
         let (path, cfg, embedder, index) = {
             let g = self.inner.lock().await;
             let path = g.store.replace_long_term(text).await?;
@@ -112,7 +119,7 @@ impl MemoryService {
         reindex_path(&cfg, embedder, index, &path, None, MemoryKind::LongTerm).await
     }
 
-    pub async fn search(&self, q: MemorySearchQuery) -> Result<Vec<MemorySearchHit>> {
+    pub async fn search_index(&self, q: MemorySearchQuery) -> Result<Vec<MemorySearchHit>> {
         let (cfg, embedder, index, kind_str, date_from, date_to) = {
             let g = self.inner.lock().await;
             (
@@ -139,6 +146,28 @@ impl MemoryService {
         };
 
         index.search(&qemb, top_k, filters).await
+    }
+
+    pub async fn save_to_index(&self, text: &str, source: &str) -> Result<()> {
+        let (cfg, embedder, index) = {
+            let g = self.inner.lock().await;
+            (g.cfg.clone(), g.embedder.clone(), g.index.clone())
+        };
+
+        // Reuse existing chunking logic; it expects a "path" string.
+        let chunks = chunk_text(&cfg, MemoryKind::LongTerm, None, source, &text);
+
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let mut embeddings = Vec::with_capacity(chunks.len());
+        for c in &chunks {
+            embeddings.push(embedder.embed(&c.text).await?);
+        }
+
+        index.upsert_chunks(&chunks, &embeddings).await?;
+        Ok(())
     }
 
     pub async fn reindex_all(&self) -> Result<()> {
@@ -193,6 +222,44 @@ impl MemoryService {
 
         Ok(())
     }
+
+    pub async fn build_prompt_events(
+        &self,
+        include_long_term: bool,
+        include_daily_days: usize, // e.g. 2 for today+yesterday
+        max_chars: usize,
+    ) -> Result<Vec<TranscriptEvent>> {
+        let mut out = Vec::new();
+        let mut buf = String::new();
+
+        if include_long_term {
+            let s = self.get_short_term().await.unwrap_or_default();
+            if !s.trim().is_empty() {
+                buf.push_str("Long-term memory:\n");
+                buf.push_str(&truncate_chars(&s, max_chars));
+                buf.push_str("\n\n");
+            }
+        }
+
+        if include_daily_days > 0 {
+            buf.push_str("Daily memory:\n");
+            for ymd in recent_local_days(include_daily_days) {
+                let s = self.get_daily(&ymd).await.unwrap_or_default();
+                if s.trim().is_empty() {
+                    continue;
+                }
+                buf.push_str(&format!("- {ymd}\n"));
+                buf.push_str(&truncate_chars(&s, max_chars));
+                buf.push_str("\n\n");
+            }
+        }
+
+        if !buf.trim().is_empty() {
+            out.push(TranscriptEvent::custom_message("system", buf));
+        }
+
+        Ok(out)
+    }
 }
 
 async fn reindex_path(
@@ -222,4 +289,32 @@ async fn reindex_path(
     index.upsert_chunks(&chunks, &embeddings).await?;
 
     Ok(())
+}
+
+fn recent_local_days(n: usize) -> Vec<String> {
+    // n=2 => [yesterday, today]
+    // You already have local_day_string(). Implement yesterday helper if missing.
+    // Keep deterministic order from oldest to newest.
+    let mut out = Vec::new();
+    if n >= 2 {
+        out.push(crate::time::local_day_string_yesterday());
+    }
+    out.push(crate::time::local_day_string());
+    out.truncate(n);
+    out
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push_str("…");
+    out
 }

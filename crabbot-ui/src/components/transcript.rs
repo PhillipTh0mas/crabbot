@@ -2,6 +2,10 @@ use leptos::prelude::*;
 use serde_json::Value as Json;
 use std::collections::HashMap;
 
+use leptos::html;
+use leptos::prelude::*;
+use web_sys::HtmlElement;
+
 use icons::{ChevronDown, ChevronRight};
 
 use crabbot_shared::api::transcript::{
@@ -127,25 +131,67 @@ fn group_transcript_events(events: Vec<TranscriptEvent>) -> Vec<TranscriptRow> {
 
 #[component]
 pub fn TranscriptList(
-    /// Full transcript events.
-    #[prop(into)]
-    events: Signal<Vec<TranscriptEvent>>,
+    #[prop(into)] events: Signal<Vec<TranscriptEvent>>,
+
+    /// Optional: fixed height class for the scroll container.
+    /// Defaults to `h-[50vh]`.
+    #[prop(optional)]
+    height_class: Option<String>,
 ) -> impl IntoView {
     let rows = create_memo(move |_| group_transcript_events(events.get()));
 
+    let scroll_ref = create_node_ref::<html::Div>();
+    let (pinned_to_bottom, set_pinned_to_bottom) = create_signal(true);
+
+    let height = height_class.unwrap_or("h-[50vh]".to_string());
+
+    let update_pinned = move || {
+        if let Some(el) = scroll_ref.get() {
+            let el: HtmlElement = el.into();
+            let scroll_top = el.scroll_top() as f64;
+            let scroll_h = el.scroll_height() as f64;
+            let client_h = el.client_height() as f64;
+
+            // within 48px of bottom counts as "at bottom"
+            let near_bottom = (scroll_h - (scroll_top + client_h)) <= 48.0;
+            set_pinned_to_bottom.set(near_bottom);
+        }
+    };
+
+    let scroll_to_bottom = move || {
+        if let Some(el) = scroll_ref.get() {
+            let el: HtmlElement = el.into();
+            el.set_scroll_top(el.scroll_height());
+        }
+    };
+
+    // When new content arrives, scroll only if user is pinned.
+    create_effect(move |_| {
+        // Track changes: using rows length avoids key-collision issues
+        let _n = rows.get().len();
+        if pinned_to_bottom.get() {
+            request_animation_frame(move || scroll_to_bottom());
+        }
+    });
+
     view! {
-        <div class="space-y-1">
-            <For
-                each=move || rows.get()
-                // Key: prefer call_id for tool exchanges; else timestamp.
-                key=|row| match row {
-                    TranscriptRow::ToolExchange { call_id, .. } => format!("tool:{call_id}"),
-                    TranscriptRow::Event(ev) => format!("ev:{}", ev.ts_ms()),
-                }
-                children=move |row: TranscriptRow| {
-                    view! { <TranscriptRowView row=row /> }
-                }
-            />
+        <div
+            node_ref=scroll_ref
+            class=format!("{} overflow-auto p-3", height)
+            on:scroll=move |_| update_pinned()
+        >
+            <div class="space-y-1">
+                <For
+                    each=move || rows.get().into_iter().enumerate()
+                    key=|(idx, row)| match row {
+                        TranscriptRow::ToolExchange { call_id, .. } => format!("tool:{call_id}"),
+                        TranscriptRow::Event(ev) => format!("ev:{}:{idx}", ev.ts_ms()),
+                    }
+                    children=move |(_idx, row): (usize, TranscriptRow)| {
+                        view! { <TranscriptRowView row=row /> }
+                    }
+                />
+            </div>
         </div>
     }
 }
@@ -160,10 +206,6 @@ pub fn TranscriptRowView(row: TranscriptRow) -> impl IntoView {
             TranscriptEvent::CustomMessage(e) => view! { <CustomMessageCard e=e /> }.into_any(),
             TranscriptEvent::CustomNote(e) => view! { <CustomNoteCard e=e /> }.into_any(),
             TranscriptEvent::ToolCall(_) | TranscriptEvent::ToolResult(_) => {
-                // Should not happen after grouping.
-                ().into_any()
-            }
-            TranscriptEvent::UserFacingHtml(e) => {
                 // Should not happen after grouping.
                 ().into_any()
             }

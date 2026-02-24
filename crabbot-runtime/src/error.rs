@@ -9,6 +9,7 @@ pub enum Error {
     Other(String),
     Unauthorized(String),
     BadRequest(String),
+    NotFound(String),
     LLMError(String),
     ToolError(String),
 }
@@ -34,6 +35,10 @@ impl Error {
         Error::BadRequest(msg.into())
     }
 
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Error::NotFound(msg.into())
+    }
+
     pub fn llm(msg: impl Into<String>) -> Self {
         Error::LLMError(msg.into())
     }
@@ -47,23 +52,24 @@ impl Error {
     }
 }
 
-impl ToString for Error {
-    fn to_string(&self) -> String {
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IOError(err.to_string())
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Unauthorized(m) => format!("Unauthorized: {}", m),
-            Error::BadRequest(m) => format!("Bad Request: {}", m),
+            Error::Unauthorized(m) => write!(f, "Unauthorized: {}", m),
+            Error::BadRequest(m) => write!(f, "Bad Request: {}", m),
+            Error::NotFound(m) => write!(f, "Not Found: {}", m),
             Error::Other(m)
             | Error::ConfigError(m)
             | Error::IOError(m)
             | Error::LLMError(m)
-            | Error::ToolError(m) => format!("Other Error: {}", m),
+            | Error::ToolError(m) => write!(f, "Other Error: {}", m),
         }
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(err: std::io::Error) -> Self {
-        Error::IOError(err.to_string())
     }
 }
 
@@ -72,12 +78,15 @@ impl IntoResponse for Error {
         let (status, msg) = match self {
             Error::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.to_string()),
             Error::BadRequest(m) => (StatusCode::BAD_REQUEST, m.to_string()),
+            Error::NotFound(m) => (StatusCode::NOT_FOUND, m.to_string()),
             Error::Other(m)
             | Error::ConfigError(m)
             | Error::IOError(m)
             | Error::LLMError(m)
             | Error::ToolError(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
         };
+
+        tracing::error!("Error: {}", msg);
 
         (status, axum::Json(json!({ "error": msg }))).into_response()
     }

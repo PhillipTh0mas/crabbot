@@ -1,8 +1,12 @@
 use async_trait::async_trait;
 use crabbot_shared::api::transcript::TranscriptEvent;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::Value as Json;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     config::{LlmConfig, PromptConfig},
@@ -24,6 +28,9 @@ pub struct OllamaOpenAiCompat {
     cfg: LlmConfig,
     http: Client,
     prompt_builder: DefaultPromptBuilder,
+
+    // Best-effort state so we can distinguish "still pulling" from "missing/misconfig".
+    pulling: Arc<AtomicBool>,
 }
 
 impl OllamaOpenAiCompat {
@@ -34,11 +41,19 @@ impl OllamaOpenAiCompat {
             .map_err(|e| Error::other(e.to_string()))?;
 
         let prompt_builder = DefaultPromptBuilder::new(prompt_cfg);
-        Ok(Self {
+
+        let this = Self {
             cfg,
             http,
             prompt_builder,
-        })
+            pulling: Arc::new(AtomicBool::new(false)),
+        };
+
+        // Fire-and-forget warmup pull for default cfg.model.
+        // NOTE: requires `new()` to be called inside a running Tokio runtime.
+        this.spawn_prefetch_pull(this.cfg.model.clone());
+
+        Ok(this)
     }
 
     fn effective_model<'a>(&'a self, session: &'a SessionEntry) -> &'a str {
@@ -64,6 +79,141 @@ impl OllamaOpenAiCompat {
             .and_then(|m| m.max_output_tokens)
             .unwrap_or(self.cfg.max_output_tokens)
     }
+
+    fn ollama_base_url(&self) -> String {
+        self.cfg.base_url.trim_end_matches('/').to_string()
+    }
+
+    fn ollama_root_url(&self) -> String {
+        // Convert ".../v1" -> "..."
+        let v1 = self.ollama_base_url();
+        if let Some(root) = v1.strip_suffix("/v1") {
+            root.to_string()
+        } else {
+            // If caller misconfigured base_url, fall back to trimming last segment
+            v1.rsplit_once('/')
+                .map(|(a, _)| a.to_string())
+                .unwrap_or(v1)
+        }
+    }
+
+    fn spawn_prefetch_pull(&self, model: String) {
+        let url_pull = format!("{}/api/pull", self.ollama_root_url());
+        let timeout_secs = self.cfg.timeout_secs;
+        let pulling = self.pulling.clone();
+
+        tokio::spawn(async move {
+            // If another pull is already running, avoid spawning another.
+            if pulling
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                return;
+            }
+
+            let http = match Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => {
+                    pulling.store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+
+            // This endpoint streams NDJSON; we must drain it or the pull can be canceled.
+            let resp = match http
+                .post(&url_pull)
+                .json(&serde_json::json!({ "name": model }))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    pulling.store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+
+            let _ = resp.text().await;
+            pulling.store(false, Ordering::Relaxed);
+        });
+    }
+
+    async fn show_model(&self, model: &str) -> Result<StatusCode> {
+        // Ollama native API: POST /api/show { "name": "<model>" }
+        let url = format!("{}/api/show", self.ollama_root_url());
+
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "name": model }))
+            .send()
+            .await
+            .map_err(|e| Error::llm(format!("ollama show request failed: {e}")))?;
+
+        Ok(resp.status())
+    }
+
+    /// Best-effort check+start:
+    /// - If model is present (`/api/show` success): do nothing.
+    /// - If not found: start background pull and return.
+    /// This avoids blocking requests while still making progress.
+    async fn ensure_model_started(&self, model: &str) -> Result<()> {
+        let status = self.show_model(model).await?;
+
+        if status.is_success() {
+            return Ok(());
+        }
+
+        // Some setups return 404 if missing; treat any non-success as "not ready" and start pull.
+        // If it's a real auth/network issue, the pull will fail anyway and requests will error.
+        if !self.pulling.load(Ordering::Relaxed) {
+            self.spawn_prefetch_pull(model.to_string());
+        }
+
+        Ok(())
+    }
+
+    async fn post_chat_completions(&self, url: &str, body: &Json) -> Result<String> {
+        let resp = self
+            .http
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| Error::llm(format!("request failed: {e}")))?;
+
+        if resp.status() == StatusCode::NOT_FOUND {
+            let text = resp.text().await.unwrap_or_default();
+            let model = body
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+
+            if self.pulling.load(Ordering::Relaxed) {
+                return Err(Error::llm(format!(
+                    "ollama returned 404 for /v1/chat/completions while model '{model}' is still downloading (pull in progress). \
+Retry shortly. Ollama response: {text}"
+                )));
+            }
+
+            return Err(Error::llm(format!(
+                "ollama returned 404 for /v1/chat/completions. \
+Model '{model}' is likely missing/not loaded yet, or base_url is wrong. \
+base_url='{}' (expected .../v1). Ollama response: {text}",
+                self.cfg.base_url
+            )));
+        }
+
+        let text = match resp.error_for_status() {
+            Ok(r) => r.text().await.unwrap_or_default(),
+            Err(e) => return Err(Error::llm(e.to_string())),
+        };
+
+        Ok(text)
+    }
 }
 
 #[async_trait]
@@ -78,6 +228,11 @@ impl Llm for OllamaOpenAiCompat {
             self.cfg.base_url.trim_end_matches('/')
         );
 
+        let model = self.effective_model(session);
+
+        // Start pull in background if needed (do not await).
+        self.ensure_model_started(model).await?;
+
         // Build compaction messages (system + user) using the same prompt builder.
         let messages = self
             .prompt_builder
@@ -85,28 +240,13 @@ impl Llm for OllamaOpenAiCompat {
 
         // Keep compaction deterministic-ish: low temperature.
         let mut body = serde_json::json!({
-            "model": self.effective_model(session),
+            "model": model,
             "messages": messages,
             "temperature": 0.2_f32,
             "max_tokens": self.effective_max_tokens(session),
         });
 
-        // No tools during compaction.
-        // If you want to be extra strict and your backend supports it, you could request JSON mode,
-        // but OpenAI-compat in Ollama is not guaranteed to support response_format reliably.
-
-        let resp = self
-            .http
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::llm(format!("request failed: {e}")))?;
-
-        let text = match resp.error_for_status() {
-            Ok(r) => r.text().await.unwrap_or_default(),
-            Err(e) => return Err(Error::llm(e.to_string())),
-        };
+        let text = self.post_chat_completions(&url, &body).await?;
 
         let parsed: ChatCompletionsResponse =
             serde_json::from_str(&text).map_err(|e| Error::llm(format!("bad json: {e}")))?;
@@ -123,40 +263,32 @@ impl Llm for OllamaOpenAiCompat {
 
         // Enforce char budget (retry once by asking to shorten; then hard-trim).
         if !self.prompt_builder.is_valid_compaction(&summary) {
-            // Retry once with a stricter instruction.
             let mut retry_messages = self
                 .prompt_builder
                 .build_compact_messages(session, compacted_events);
 
             retry_messages.push(serde_json::json!({
-                    "role": "user",
-                    "content": format!("Shorten the summary to <= {} characters. Output ONLY the summary text.", self.prompt_builder.get_max_chars())
-                }));
+                "role": "user",
+                "content": format!(
+                    "Shorten the summary to <= {} characters. Output ONLY the summary text.",
+                    self.prompt_builder.get_max_chars()
+                )
+            }));
 
             body["messages"] = Json::Array(retry_messages);
 
-            let resp2 = self
-                .http
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| Error::llm(format!("request failed: {e}")))?;
+            let text2 = self.post_chat_completions(&url, &body).await?;
 
-            let status2 = resp2.status();
-            let text2 = resp2.text().await.unwrap_or_default();
-            if status2.is_success() {
-                if let Ok(parsed2) = serde_json::from_str::<ChatCompletionsResponse>(&text2) {
-                    let completion2 = parsed2.into_completion();
-                    let mut s2 = String::new();
-                    for out in completion2.outputs {
-                        if let LlmOutput::AssistantText(t) = out {
-                            s2.push_str(t.trim());
-                        }
+            if let Ok(parsed2) = serde_json::from_str::<ChatCompletionsResponse>(&text2) {
+                let completion2 = parsed2.into_completion();
+                let mut s2 = String::new();
+                for out in completion2.outputs {
+                    if let LlmOutput::AssistantText(t) = out {
+                        s2.push_str(t.trim());
                     }
-                    if !s2.trim().is_empty() {
-                        summary = s2;
-                    }
+                }
+                if !s2.trim().is_empty() {
+                    summary = s2;
                 }
             }
         }
@@ -181,10 +313,15 @@ impl Llm for OllamaOpenAiCompat {
             self.cfg.base_url.trim_end_matches('/')
         );
 
+        let model = self.effective_model(session);
+
+        // Start pull in background if needed (do not await).
+        self.ensure_model_started(model).await?;
+
         let messages = self.prompt_builder.build_messages(session, events);
 
         let mut body = serde_json::json!({
-            "model": self.effective_model(session),
+            "model": model,
             "messages": messages,
             "temperature": self.effective_temperature(session),
             "max_tokens": self.effective_max_tokens(session),
@@ -193,7 +330,7 @@ impl Llm for OllamaOpenAiCompat {
         if !tools.is_empty() {
             // OpenAI-style tool schema
             let tool_objs: Vec<Json> = tools
-                .into_iter()
+                .iter()
                 .map(|t| {
                     serde_json::json!({
                         "type": "function",
@@ -211,18 +348,7 @@ impl Llm for OllamaOpenAiCompat {
             body["tool_choice"] = serde_json::json!("auto");
         }
 
-        let resp = self
-            .http
-            .post(url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::llm(format!("request failed: {e}")))?;
-
-        let text = match resp.error_for_status() {
-            Ok(r) => r.text().await.unwrap_or_default(),
-            Err(e) => return Err(Error::llm(e.to_string())),
-        };
+        let text = self.post_chat_completions(&url, &body).await?;
 
         let parsed: ChatCompletionsResponse =
             serde_json::from_str(&text).map_err(|e| Error::llm(format!("bad json: {e}")))?;
@@ -289,7 +415,7 @@ impl ChatCompletionsResponse {
                     outputs.push(LlmOutput::ToolCall(ToolCall {
                         id: tc.id,
                         name: tc.function.name,
-                        args: args,
+                        args,
                     }));
                 }
             }

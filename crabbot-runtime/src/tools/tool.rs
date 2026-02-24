@@ -73,5 +73,5 @@ pub trait Tool: Debug + Send + Sync {
     fn spec(&self) -> ToolSpec;
 
     /// Execute a tool call.
-    async fn call(&self, call: ToolCall) -> Result<ToolResult>;
+    async fn call(&self, call: ToolCall, session_key: &str) -> Result<ToolResult>;
 }

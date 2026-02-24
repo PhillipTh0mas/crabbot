@@ -1,7 +1,9 @@
 use crate::components::transcript::TranscriptList;
 use crate::components::ui::button::{Button, ButtonSize, ButtonVariant};
 use icons::{History, Send};
+use leptos::html;
 use leptos::prelude::*;
+use web_sys::HtmlElement;
 
 use crabbot_shared::api::transcript::TranscriptEvent;
 
@@ -94,10 +96,7 @@ pub fn ChatTopBar(
                                 "×"
                             </button>
                         </div>
-
-                        <div class="h-[50vh] overflow-auto p-3">
-                            <TranscriptList events=history_events />
-                        </div>
+                        <TranscriptList events=history_events height_class="h-[50vh]".to_string() />
                     </div>
                 </div>
             </Show>

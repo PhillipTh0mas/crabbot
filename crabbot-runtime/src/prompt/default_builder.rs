@@ -93,13 +93,17 @@ impl DefaultPromptBuilder {
     ) -> Vec<serde_json::Value> {
         let mut messages = Vec::new();
 
-        messages.push(json!({
-            "role": "system",
-            "content": self.cfg.system_preamble
-        }));
-
         messages.extend(TranscriptEvent::vec_to_prompt_messages(events));
 
+        // add current system time and sys info
+        let sys_info = format!(
+            "System time: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        messages.push(json!({
+            "role": "system",
+            "content": sys_info
+        }));
         messages
     }
 }

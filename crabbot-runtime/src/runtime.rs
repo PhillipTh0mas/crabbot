@@ -1,15 +1,18 @@
 use std::sync::Arc;
 
 use crate::{
+    agent::AgentRegistry,
     api,
     config::Config,
     error::Result,
     llm,
-    memory::{embedder::OllamaOpenAiCompatEmbedder, service::MemoryService},
-    prompt, queue, routing,
+    memory::service::MemoryService,
+    queue, routing,
     run::RunEngine,
     storage::{session_store::SessionStore, transcript_store::TranscriptStore},
+    task::manager::TaskManager,
     tools::registry::ToolRegistry,
+    ui::store::UiHtmlStore,
 };
 
 pub async fn create() -> Result<Arc<RunEngine>> {
@@ -21,12 +24,7 @@ pub async fn create() -> Result<Arc<RunEngine>> {
     let sessions = Arc::new(SessionStore::open(cfg.paths.sessions_index())?);
     let transcripts = Arc::new(TranscriptStore::open(cfg.paths.transcripts_dir())?);
 
-    // 3) Wire tools
-    let tools = Arc::new(ToolRegistry::new(cfg.tool_policy.clone()));
-    tools.register_builtins().await?;
-    tools.register_optional().await?;
-
-    // 4) Wire routing + queue + LLM + prompt builder
+    // 3) Wire routing + queue + LLM + prompt builder
     let router = Arc::new(routing::router::DefaultSessionRouter::new(
         cfg.routing.clone(),
     ));
@@ -34,6 +32,17 @@ pub async fn create() -> Result<Arc<RunEngine>> {
 
     let memory = Arc::new(MemoryService::open(cfg.paths.memory_dir(), cfg.memory.clone()).await?);
     let llm = llm::create_llm_client(&cfg.llm, &cfg.prompt)?;
+    let agents = Arc::new(AgentRegistry::open(cfg.paths.agents_dir()).await?);
+
+    let tasks = Arc::new(TaskManager::open(cfg.paths.tasks_dir(), scheduler.clone()).await?);
+
+    let html_store = UiHtmlStore::new(cfg.paths.ui_dir());
+    // 4) Wire tools
+    let tools = Arc::new(ToolRegistry::new(cfg.tool_policy.clone()));
+    tools
+        .register_builtins(&cfg.paths, &memory, &tasks, &html_store)
+        .await?;
+    tools.register_optional().await?;
 
     // 5) Run engine (the “runtime brain”)
     let engine = Arc::new(RunEngine::new(
@@ -44,7 +53,10 @@ pub async fn create() -> Result<Arc<RunEngine>> {
         transcripts,
         llm,
         tools,
+        agents,
         memory,
+        tasks,
+        html_store,
     ));
 
     // 6) Start API (HTTP + WS) and hand it the engine handle
