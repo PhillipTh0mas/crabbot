@@ -76,6 +76,21 @@ impl MemoryStore {
         Ok(p)
     }
 
+    pub async fn replace_daily(&self, ymd: &str, text: &str) -> Result<PathBuf> {
+        let p = self.paths.daily_file(ymd);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| crate::error::Error::io(format!("create_dir_all failed: {e}")))?;
+        }
+
+        fs::write(&p, text)
+            .await
+            .map_err(|e| crate::error::Error::io(format!("write daily failed: {e}")))?;
+
+        Ok(p)
+    }
+
     pub async fn replace_long_term(&self, text: &str) -> Result<PathBuf> {
         fs::write(&self.paths.memory_md, text)
             .await

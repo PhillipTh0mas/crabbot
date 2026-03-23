@@ -35,20 +35,48 @@ pub async fn entrypoint() -> Result<()> {
         Cmd::Runtime {
             cmd: RuntimeCmd::Run,
         } => {
+            tracing::info!("Starting crabbot runtime...");
             let cancel = CancellationToken::new();
-            let engine = runtime::create().await?;
-            loop {
+
+            let engine = match runtime::create().await {
+                Ok(e) => {
+                    tracing::info!("Runtime engine created successfully");
+                    e
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create runtime engine: {e}");
+                    return Err(e);
+                }
+            };
+
+            // Register signal handlers for graceful shutdown.
+            // In a container under tini, SIGTERM is the normal stop signal.
+            let cancel_for_signal = cancel.clone();
+            tokio::spawn(async move {
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("failed to register SIGTERM handler");
+
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received SIGINT, shutting down runtime...");
-                        cancel.cancel();
                     }
-                    _ = engine.run(cancel.clone()) => {
-                        break;
+                    _ = sigterm.recv() => {
+                        tracing::info!("Received SIGTERM, shutting down runtime...");
                     }
                 }
+                cancel_for_signal.cancel();
+            });
+
+            tracing::info!("Runtime engine running — waiting for work...");
+            let result = engine.run(cancel.clone()).await;
+
+            match &result {
+                Ok(()) => tracing::info!("Runtime engine stopped gracefully"),
+                Err(e) => tracing::error!("Runtime engine stopped with error: {e}"),
             }
-            Ok(())
+
+            result
         }
 
         Cmd::Chat => {

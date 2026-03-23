@@ -7,7 +7,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{EventSource, MessageEvent};
 
 use crabbot_shared::api::model::{
-    ListSessionsResp, PostMessageReq, PostMessageResp, TranscriptResp,
+    InFlightSessionsResp, ListSessionsDetailedResp, ListSessionsResp, MemoryResp, PostMessageReq,
+    PostMessageResp, SessionInfo, ToolSessionHistoryResp, ToolSessionsListResp, TranscriptResp,
+    UpdateMemoryReq,
 };
 use crabbot_shared::api::transcript::TranscriptEvent;
 
@@ -29,6 +31,118 @@ pub async fn api_list_sessions(base_http: &str) -> Result<Vec<String>, String> {
     let parsed: ListSessionsResp = resp.json().await.map_err(|e| e.to_string())?;
 
     Ok(parsed.session_keys)
+}
+
+pub async fn api_list_sessions_detailed(base_http: &str) -> Result<Vec<SessionInfo>, String> {
+    let url = format!("{}/v1/sessions/detailed", base_url(base_http));
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    let parsed: ListSessionsDetailedResp = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed.sessions)
+}
+
+pub async fn api_get_memory(base_http: &str) -> Result<MemoryResp, String> {
+    let url = format!("{}/v1/memory", base_url(base_http));
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub async fn api_get_in_flight_sessions(base_http: &str) -> Result<Vec<String>, String> {
+    let url = format!("{}/v1/sessions/in_flight", base_url(base_http));
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    let parsed: InFlightSessionsResp = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed.session_keys)
+}
+
+pub async fn api_get_tool_sessions(
+    base_http: &str,
+) -> Result<Vec<crabbot_shared::api::model::ToolSessionStatsResp>, String> {
+    let url = format!("{}/v1/tool_sessions", base_url(base_http));
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    let parsed: ToolSessionsListResp = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed.tools)
+}
+
+pub async fn api_get_tool_session_history(
+    base_http: &str,
+    tool_name: &str,
+) -> Result<ToolSessionHistoryResp, String> {
+    let url = format!(
+        "{}/v1/tool_sessions/{}",
+        base_url(base_http),
+        urlencoding::encode(tool_name),
+    );
+
+    let resp = Request::get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub async fn api_update_memory(
+    base_http: &str,
+    memory_type: &str,
+    content: String,
+    daily_date: Option<String>,
+) -> Result<(), String> {
+    let url = format!("{}/v1/memory", base_url(base_http));
+
+    let req_body = UpdateMemoryReq {
+        memory_type: memory_type.to_string(),
+        content,
+        daily_date,
+    };
+
+    let resp = Request::put(&url)
+        .json(&req_body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+
+    Ok(())
 }
 
 pub async fn api_get_transcript(

@@ -109,6 +109,28 @@ impl MemoryService {
         .await
     }
 
+    pub async fn update_daily_replace(&self, ymd: &str, text: &str) -> Result<()> {
+        let (path, cfg, embedder, index) = {
+            let g = self.inner.lock().await;
+            let path = g.store.replace_daily(ymd, text).await?;
+            (path, g.cfg.clone(), g.embedder.clone(), g.index.clone())
+        };
+
+        if let Err(e) = reindex_path(
+            &cfg,
+            embedder,
+            index,
+            &path,
+            Some(ymd.to_string()),
+            MemoryKind::Daily,
+        )
+        .await
+        {
+            tracing::warn!("Failed to reindex daily memory for {ymd} (file saved ok): {e}");
+        }
+        Ok(())
+    }
+
     pub async fn write_short_term_replace(&self, text: &str) -> Result<()> {
         let (path, cfg, embedder, index) = {
             let g = self.inner.lock().await;
@@ -116,7 +138,11 @@ impl MemoryService {
             (path, g.cfg.clone(), g.embedder.clone(), g.index.clone())
         };
 
-        reindex_path(&cfg, embedder, index, &path, None, MemoryKind::LongTerm).await
+        if let Err(e) = reindex_path(&cfg, embedder, index, &path, None, MemoryKind::LongTerm).await
+        {
+            tracing::warn!("Failed to reindex short-term memory (file saved ok): {e}");
+        }
+        Ok(())
     }
 
     pub async fn search_index(&self, q: MemorySearchQuery) -> Result<Vec<MemorySearchHit>> {

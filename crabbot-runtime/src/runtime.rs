@@ -11,7 +11,7 @@ use crate::{
     run::RunEngine,
     storage::{session_store::SessionStore, transcript_store::TranscriptStore},
     task::manager::TaskManager,
-    tools::registry::ToolRegistry,
+    tools::{registry::ToolRegistry, tool_sessions::ToolSessionStore},
     ui::store::UiHtmlStore,
 };
 
@@ -37,14 +37,18 @@ pub async fn create() -> Result<Arc<RunEngine>> {
     let tasks = Arc::new(TaskManager::open(cfg.paths.tasks_dir(), scheduler.clone()).await?);
 
     let html_store = UiHtmlStore::new(cfg.paths.ui_dir());
-    // 4) Wire tools
+
+    // 4) Wire per-tool session store (builds up context about tool usage over time)
+    let tool_sessions = Arc::new(ToolSessionStore::open(cfg.paths.tool_sessions_dir()).await?);
+
+    // 5) Wire tools
     let tools = Arc::new(ToolRegistry::new(cfg.tool_policy.clone()));
     tools
         .register_builtins(&cfg.paths, &memory, &tasks, &html_store)
         .await?;
     tools.register_optional().await?;
 
-    // 5) Run engine (the “runtime brain”)
+    // 6) Run engine (the "runtime brain")
     let engine = Arc::new(RunEngine::new(
         cfg.clone(),
         router,
@@ -57,10 +61,10 @@ pub async fn create() -> Result<Arc<RunEngine>> {
         memory,
         tasks,
         html_store,
+        tool_sessions,
     ));
 
-    // 6) Start API (HTTP + WS) and hand it the engine handle
-    // // span in task
+    // 7) Start API (HTTP + WS) and hand it the engine handle
     let engine_cp = engine.clone();
     let config_cp = cfg.clone();
     let app = api::http::build_router(engine_cp, config_cp.api.clone())?;

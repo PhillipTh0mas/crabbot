@@ -134,6 +134,7 @@ impl Paths {
         std::fs::create_dir_all(self.agents_dir())?;
         std::fs::create_dir_all(self.ui_dir())?;
         std::fs::create_dir_all(self.tasks_dir())?;
+        std::fs::create_dir_all(self.tool_sessions_dir())?;
 
         self.ensure_default_files()?;
 
@@ -172,6 +173,10 @@ impl Paths {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    pub fn tool_sessions_dir(&self) -> PathBuf {
+        self.data_dir.join("tool_sessions")
     }
 
     pub fn tasks_dir(&self) -> PathBuf {

@@ -5,14 +5,15 @@ use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
+use crate::queue::scheduler::Priority;
 use crate::queue::scheduler::QueueScheduler;
 use crate::run::RunReply;
 use crate::time::now_ts_ms;
 
 pub type TaskId = String;
 
-const HEARTBEAT_TASK_ID: &str = "heartbeat";
-const HEARTBEAT_INTERVAL_SECS: u64 = 120;
+const BACKGROUND_THINK_TASK_ID: &str = "background_think";
+const BACKGROUND_THINK_INTERVAL_SECS: u64 = 300; // 5 minutes
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -127,7 +128,7 @@ impl TaskManager {
             scheduler,
         };
 
-        this.ensure_heartbeat_task().await?;
+        this.ensure_background_think_task().await?;
         Ok(this)
     }
 
@@ -148,10 +149,30 @@ impl TaskManager {
 
     pub async fn enqueue_due(&self, limit: usize) -> Result<usize> {
         let due = self.claim_due(limit).await?;
+        let mut enqueued = 0;
         for t in &due {
-            let _ = self.scheduler.add(t.run_session_key(), t.tick_body()).await;
+            let session_key = t.run_session_key();
+            // Only enqueue if not already queued or in-flight for this session.
+            // This prevents duplicate heartbeats and interval tasks from piling up.
+            if self.scheduler.has_queued_or_inflight(&session_key).await {
+                tracing::debug!(
+                    "Skipping enqueue for task {} — already queued or in-flight (session: {})",
+                    t.id,
+                    session_key
+                );
+                continue;
+            }
+
+            let priority = if t.id == BACKGROUND_THINK_TASK_ID {
+                Priority::Background
+            } else {
+                Priority::Normal
+            };
+
+            self.scheduler.schedule(session_key, priority).await;
+            enqueued += 1;
         }
-        Ok(due.len())
+        Ok(enqueued)
     }
 
     pub async fn create(&self, input: TaskCreateInput) -> Result<Task> {
@@ -191,7 +212,7 @@ impl TaskManager {
         // optional: enqueue immediately (so create triggers first run without waiting for runner tick)
         let _ = self
             .scheduler
-            .add(task.run_session_key(), task.tick_body())
+            .add_with_priority(task.run_session_key(), task.tick_body(), Priority::Normal)
             .await;
 
         Ok(task)
@@ -375,7 +396,10 @@ impl TaskManager {
             format!("Task completed: {desc}\n\n{out}")
         };
 
-        let _ = self.scheduler.add(notify_key, body).await;
+        let _ = self
+            .scheduler
+            .add_with_priority(notify_key, body, Priority::Normal)
+            .await;
     }
 
     pub async fn save(&self) -> Result<()> {
@@ -392,41 +416,40 @@ impl TaskManager {
         Ok(())
     }
 
-    async fn ensure_heartbeat_task(&self) -> Result<()> {
+    async fn ensure_background_think_task(&self) -> Result<()> {
         let now = now_ts_ms();
         let mut created = false;
 
         {
             let mut g = self.index.lock().await;
 
-            if !g.tasks.contains_key(HEARTBEAT_TASK_ID) {
+            if !g.tasks.contains_key(BACKGROUND_THINK_TASK_ID) {
                 let t = Task {
-                        id: HEARTBEAT_TASK_ID.to_string(),
-                        created_ts_ms: now,
-                        updated_ts_ms: now,
-                        agent_id: "system".to_string(),
-                        description: "Heartbeat: housekeeping tick. Check if there is any open work that need to get started or progressed. If so create a task for it.".to_string(),
-                        interval_secs: HEARTBEAT_INTERVAL_SECS,
-                        next_run_ts_ms: now, // run immediately once at startup
-                        run_count: 0,
-                        status: TaskStatus::Active,
-                        notify_session_key: None,
-                        notify_agent_id: None,
-                        last_run_ts_ms: None,
-                        last_error: None,
-                        last_output: None,
-                        flags: TaskFlags {
-                            non_completable: true,
-                            non_cancelable: true,
-                            non_failurable: true,
-                            non_deletable: true,
-                        },
-                    };
+                    id: BACKGROUND_THINK_TASK_ID.to_string(),
+                    created_ts_ms: now,
+                    updated_ts_ms: now,
+                    agent_id: "system".to_string(),
+                    description: "Background thinking session. Review current goals, check task progress, update plans, reflect on recent interactions, and decide if any new work should be started. Update short-term memory with your current thinking and priorities. When important information, status updates, or summaries should be surfaced to the user, use the render_user_ui_html tool to update the session's UI HTML so it is visible in the main UI.".to_string(),
+                    interval_secs: BACKGROUND_THINK_INTERVAL_SECS,
+                    next_run_ts_ms: now + 30_000, // start 30s after boot
+                    run_count: 0,
+                    status: TaskStatus::Active,
+                    notify_session_key: None,
+                    notify_agent_id: None,
+                    last_run_ts_ms: None,
+                    last_error: None,
+                    last_output: None,
+                    flags: TaskFlags {
+                        non_completable: true,
+                        non_cancelable: true,
+                        non_failurable: true,
+                        non_deletable: true,
+                    },
+                };
 
-                g.tasks.insert(HEARTBEAT_TASK_ID.to_string(), t);
+                g.tasks.insert(BACKGROUND_THINK_TASK_ID.to_string(), t);
                 created = true;
-            } else if let Some(t) = g.tasks.get_mut(HEARTBEAT_TASK_ID) {
-                // enforce invariants if file was edited or older version existed
+            } else if let Some(t) = g.tasks.get_mut(BACKGROUND_THINK_TASK_ID) {
                 t.flags.non_completable = true;
                 t.flags.non_cancelable = true;
                 t.flags.non_failurable = true;
@@ -436,17 +459,13 @@ impl TaskManager {
                     t.status = TaskStatus::Active;
                 }
                 if t.interval_secs == 0 {
-                    t.interval_secs = HEARTBEAT_INTERVAL_SECS;
+                    t.interval_secs = BACKGROUND_THINK_INTERVAL_SECS;
                 }
             }
         }
 
         if created {
             self.save().await?;
-            // enqueue immediately
-            if let Some(t) = self.get(HEARTBEAT_TASK_ID).await? {
-                let _ = self.scheduler.add(t.run_session_key(), t.tick_body()).await;
-            }
         }
         Ok(())
     }

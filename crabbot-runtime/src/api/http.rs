@@ -15,7 +15,11 @@ use axum::{
     routing::{get, get_service, post},
 };
 use crabbot_shared::api::{
-    model::{ListSessionsResp, PostMessageReq, PostMessageResp, TranscriptQuery, TranscriptResp},
+    model::{
+        InFlightSessionsResp, ListSessionsDetailedResp, ListSessionsResp, MemoryResp,
+        PostMessageReq, PostMessageResp, ToolSessionHistoryResp, ToolSessionsListResp,
+        TranscriptQuery, TranscriptResp, UpdateMemoryReq,
+    },
     transcript::TranscriptEvent,
     ui_html::{UiHtmlGetResp, UiHtmlUpdate},
 };
@@ -56,6 +60,14 @@ pub fn build_router(engine: Arc<RunEngine>, cfg: ApiConfig) -> Result<Router> {
         .route("/health", get(health))
         // Sessions
         .route("/v1/sessions", get(list_sessions))
+        .route("/v1/sessions/detailed", get(list_sessions_detailed))
+        .route("/v1/sessions/in_flight", get(get_in_flight_sessions))
+        .route("/v1/tool_sessions", get(get_tool_sessions))
+        .route(
+            "/v1/tool_sessions/{tool_name}",
+            get(get_tool_session_history),
+        )
+        .route("/v1/memory", get(get_memory).put(update_memory))
         .route("/v1/sessions/{session_key}/message", post(post_message))
         .route(
             "/v1/sessions/{session_key}/transcript",
@@ -142,6 +154,109 @@ async fn list_sessions(
     authorize_gateway(&state.http.cfg, &headers)?;
     let session_keys = state.http.engine.list_session_keys().await?;
     Ok((StatusCode::OK, Json(ListSessionsResp { session_keys })))
+}
+
+async fn list_sessions_detailed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+    let sessions = state.http.engine.list_sessions_detailed().await?;
+    Ok((StatusCode::OK, Json(ListSessionsDetailedResp { sessions })))
+}
+
+async fn get_memory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+    let (short_term, daily, daily_date) = state.http.engine.get_memory_snapshot().await?;
+    Ok((
+        StatusCode::OK,
+        Json(MemoryResp {
+            short_term,
+            daily,
+            daily_date,
+        }),
+    ))
+}
+
+async fn get_in_flight_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+    let session_keys = state.http.engine.get_in_flight_sessions().await?;
+    Ok((StatusCode::OK, Json(InFlightSessionsResp { session_keys })))
+}
+
+async fn get_tool_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+    let tools = state.http.engine.get_tool_sessions_stats().await?;
+    Ok((StatusCode::OK, Json(ToolSessionsListResp { tools })))
+}
+
+async fn get_tool_session_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tool_name): Path<String>,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+    match state
+        .http
+        .engine
+        .get_tool_session_history(&tool_name)
+        .await?
+    {
+        Some(history) => Ok((StatusCode::OK, Json(history)).into_response()),
+        None => Ok((
+            StatusCode::NOT_FOUND,
+            Json(json_err(&format!("tool session '{}' not found", tool_name))),
+        )
+            .into_response()),
+    }
+}
+
+async fn update_memory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateMemoryReq>,
+) -> Result<impl IntoResponse> {
+    authorize_gateway(&state.http.cfg, &headers)?;
+
+    match req.memory_type.as_str() {
+        "short_term" => {
+            state
+                .http
+                .engine
+                .memory
+                .write_short_term_replace(&req.content)
+                .await
+                .map_err(|e| Error::other(format!("Failed to update short-term memory: {e}")))?;
+        }
+        "daily" => {
+            let date = req
+                .daily_date
+                .unwrap_or_else(|| crate::time::local_day_string());
+            state
+                .http
+                .engine
+                .memory
+                .update_daily_replace(&date, &req.content)
+                .await
+                .map_err(|e| Error::other(format!("Failed to update daily memory: {e}")))?;
+        }
+        other => {
+            return Err(Error::bad_request(format!(
+                "Unknown memory_type: {other}. Use 'short_term' or 'daily'."
+            )));
+        }
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({"ok": true}))))
 }
 
 // ---------------- chat: POST message ----------------

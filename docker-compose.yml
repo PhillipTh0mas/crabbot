@@ -2,22 +2,24 @@
 services:
   crabbot:
     build:
-      context: ./crabbot-runtime
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: crabbot-runtime/Dockerfile
     image: crabbot:latest
     container_name: crabbot
     restart: unless-stopped
-    init: true
     environment:
       RUST_LOG: info
-      CRABBOT_LLM_BASE_URL: http://ollama:11434
+      CRABBOT_LLM_BASE_URL: http://ollama:11434/v1
       CRABBOT_LLM_MODEL: glm-4.7-flash
     volumes:
       - crabbot-data:/root/.config/crabbot
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
     # Add ports if your runtime serves anything (examples)
-    # ports:
-    #   - "8080:8080"
-    # -
+    ports:
+      - "8080:8080"
+
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -25,7 +27,29 @@ services:
       - "11434:11434"
     volumes:
       - ollama:/root/.ollama
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Ollama to be ready..."
+        sleep 10
+        echo "Pulling glm-4.7-flash model..."
+        ollama pull glm-4.7-flash
+        echo "Model pull complete."
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      - ollama
+
 volumes:
   crabbot-data:
   ollama:

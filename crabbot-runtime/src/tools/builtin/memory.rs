@@ -183,12 +183,21 @@ impl Tool for MemoryTool {
         let text_out = match args {
             MemoryArgs::Save { text } => {
                 let source = uuid::Uuid::new_v4().to_string();
-                self.memory.save_to_index(&text, &source).await?;
-                "Successfully saved to index.".to_string()
+                match self.memory.save_to_index(&text, &source).await {
+                    Ok(()) => "Successfully saved to index.".to_string(),
+                    Err(e) => {
+                        tracing::warn!(
+                            "memory.save_to_index failed (embedding service may be unavailable): {e}"
+                        );
+                        format!(
+                            "Failed to save to indexed memory (embedding service unavailable). The text was not indexed. Error: {e}"
+                        )
+                    }
+                }
             }
 
             MemoryArgs::Find { query, top_k } => {
-                let hits = self
+                let hits = match self
                     .memory
                     .search_index(MemorySearchQuery {
                         query,
@@ -198,7 +207,15 @@ impl Tool for MemoryTool {
                         date_to: None,
                     })
                     .await
-                    .unwrap_or_default();
+                {
+                    Ok(hits) => hits,
+                    Err(e) => {
+                        tracing::warn!(
+                            "memory.search_index failed (embedding service may be unavailable): {e}"
+                        );
+                        vec![]
+                    }
+                };
 
                 format_hits_plain(
                     hits,

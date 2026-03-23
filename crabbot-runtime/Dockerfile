@@ -1,5 +1,5 @@
 # 1) Builder (Rust 1.92.0)
-FROM rust:1.92.0-trixi AS builder
+FROM rust:1.92.0-trixie AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,19 +7,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Cache deps
+# -- Cache deps ---------------------------------------------------------------
+# Copy workspace-level manifests and lock file
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo "fn main(){}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
+COPY crabbot-runtime/Cargo.toml crabbot-runtime/Cargo.toml
+COPY crabbot-shared/Cargo.toml  crabbot-shared/Cargo.toml
+COPY crabbot-ui/Cargo.toml      crabbot-ui/Cargo.toml
 
-# Build real project
-COPY . .
-# Adjust package name if needed
+# Create dummy sources so cargo can resolve the workspace and fetch/compile deps
+RUN mkdir -p crabbot-runtime/src && echo "fn main(){}" > crabbot-runtime/src/main.rs && \
+    mkdir -p crabbot-shared/src  && echo "" > crabbot-shared/src/lib.rs && \
+    mkdir -p crabbot-ui/src      && echo "" > crabbot-ui/src/lib.rs && \
+    cargo build --release -p crabbot && \
+    rm -rf crabbot-runtime/src crabbot-shared/src
+
+# -- Build real project --------------------------------------------------------
+COPY crabbot-shared/ crabbot-shared/
+COPY crabbot-runtime/ crabbot-runtime/
+
 RUN cargo build --release -p crabbot
 
 # 2) Runtime (small Debian w/ apt + useful tools)
-FROM debian:trixi-slim
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -44,7 +53,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 RUN curl -fsSL get.make87.com | sh
-# If your binary is named differently, change this path
 COPY --from=builder /app/target/release/crabbot /usr/local/bin/crabbot
 
 ENTRYPOINT ["/usr/bin/tini","--"]
